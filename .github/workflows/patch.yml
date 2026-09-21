@@ -38,19 +38,15 @@ jobs:
           PATCHED_BASE=$(find . -name "base-patched.apk" -o -name "*-patched.apk")
           echo "Yamalanan base: $PATCHED_BASE"
           
-          # Ortak imza için debug keystore oluşturuluyor
           keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -passin pass:android -passout pass:android -dname "CN=Android Debug,O=Android,C=US"
           
-          # Yamalanan base dosyası orijinalinin üzerine yazılıyor
           cp "$PATCHED_BASE" "$(dirname "$BASE_APK")/base.apk"
           
-          # Paketteki tüm split APK dosyaları aynı anahtarla yeniden imzalanıyor
           for apk_file in $(find extracted_apks -name "*.apk"); do
             echo "İmzalanıyor: $apk_file"
             apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android "$apk_file"
           done
           
-          # Yeni apks arşivi oluşturuluyor
           cd extracted_apks
           zip -r ../patch.apks *
           cd ..
