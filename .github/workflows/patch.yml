@@ -1,0 +1,35 @@
+name: Patch APK
+on:
+  repository_dispatch:
+    types: [patch-apk]
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        required: true
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install -g apk-mitm && apk-mitm --version
+      - run: |
+          APK_URL="${{ github.event.client_payload.apk_url || github.event.inputs.apk_url }}"
+          curl -L --fail -o original.apk "$APK_URL"
+          ls -lh original.apk
+      - run: |
+          apk-mitm original.apk --wait
+          ls -lh
+          test -f original-patched.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patched-apk
+          path: original-patched.apk
+          retention-days: 3
