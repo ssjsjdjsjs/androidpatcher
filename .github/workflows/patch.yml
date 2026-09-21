@@ -38,13 +38,15 @@ jobs:
           PATCHED_BASE=$(find . -name "base-patched.apk" -o -name "*-patched.apk")
           echo "Yamalanan base: $PATCHED_BASE"
           
-          keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-          
+          # Yamalanan base dosyasını orijinalinin üzerine kopyalıyoruz
           cp "$PATCHED_BASE" "$(dirname "$BASE_APK")/base.apk"
           
-          # uber-apk-signer indiriliyor ve tüm split APK'lar ortak imzalanıyor
-          curl -L -o uber-apk-signer.jar https://github.com/pxb1988/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
-          java -jar uber-apk-signer.jar -a extracted_apks --ks debug.keystore --ks-pass pass:android --key-pass pass:android --overwrite
+          # uber-apk-signer aracını resmi kaynaktan indiriyoruz
+          curl -L -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          
+          # Paketteki tüm split APK'lar yerleşik debug imzasıyla ortak olarak yeniden imzalanıyor
+          APK_FILES=$(find extracted_apks -name "*.apk")
+          java -jar uber-apk-signer.jar -a $APK_FILES --allowResign --overwrite
           
           cd extracted_apks
           zip -r ../patch.apks *
