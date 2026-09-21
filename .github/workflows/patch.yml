@@ -18,9 +18,7 @@ jobs:
         with:
           node-version: '20'
       - name: Install apk-mitm
-        run: |
-          npm install -g apk-mitm
-          apk-mitm --version
+        run: npm install -g apk-mitm
       - name: Download APK
         run: |
           curl -L --fail -o original.apk "${{ github.event.inputs.apk_url }}"
