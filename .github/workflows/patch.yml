@@ -47,7 +47,6 @@ jobs:
           APK_FILES=$(find extracted_apks -name "*.apk")
           java -jar uber-apk-signer.jar -a $APK_FILES --allowResign --overwrite
           
-          # Hızlı ve kayıpsız paketleme (zip -0)
           cd extracted_apks
           zip -0 -q -r ../patch.apks *
           cd ..
