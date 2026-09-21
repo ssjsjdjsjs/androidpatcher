@@ -6,13 +6,11 @@ on:
         required: true
       release_tag:
         required: true
-
-permissions:
-  contents: write
-
 jobs:
   patch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -27,12 +25,12 @@ jobs:
         run: npm install -g apk-mitm
       - name: Download APKS Bundle
         run: |
-          curl -L --fail -o input.apks "${{ github.event.inputs.apk_url }}"
+          curl -L --fail --retry 5 --retry-connrefused --retry-delay 2 -o input.apks "${{ github.event.inputs.apk_url }}"
           ls -lh input.apks
       - name: Extract, Patch and Re-sign Splits
         run: |
           mkdir extracted_apks
-          unzip input.apks -d extracted_apks
+          unzip -q input.apks -d extracted_apks
           
           BASE_APK=$(find extracted_apks -name "base.apk")
           echo "Bulunan base: $BASE_APK"
@@ -42,17 +40,16 @@ jobs:
           PATCHED_BASE=$(find . -name "base-patched.apk" -o -name "*-patched.apk")
           echo "Yamalanan base: $PATCHED_BASE"
           
-          # Yamalanan base dosyasını orijinalinin üzerine kopyalıyoruz
           cp "$PATCHED_BASE" "$(dirname "$BASE_APK")/base.apk"
           
-          # uber-apk-signer ile tüm split APK'lar debug imzasıyla ortak olarak imzalanıyor
-          curl -L -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          curl -L --retry 5 -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          
           APK_FILES=$(find extracted_apks -name "*.apk")
           java -jar uber-apk-signer.jar -a $APK_FILES --allowResign --overwrite
           
-          # Yeniden paketlenip apks arşivi oluşturuluyor
+          # Hızlı ve kayıpsız paketleme (zip -0)
           cd extracted_apks
-          zip -r ../patch.apks *
+          zip -0 -q -r ../patch.apks *
           cd ..
           ls -lh patch.apks
       - name: Upload Patched APKS Directly
