@@ -1,7 +1,5 @@
 name: Patch APK
 on:
-  repository_dispatch:
-    types: [patch-apk]
   workflow_dispatch:
     inputs:
       apk_url:
@@ -19,13 +17,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install -g apk-mitm && apk-mitm --version
-      - run: |
-          APK_URL="${{ github.event.client_payload.apk_url || github.event.inputs.apk_url }}"
-          curl -L --fail -o original.apk "$APK_URL"
+      - name: Install apk-mitm
+        run: |
+          npm install -g apk-mitm
+          apk-mitm --version
+      - name: Download APK
+        run: |
+          curl -L --fail -o original.apk "${{ github.event.inputs.apk_url }}"
           ls -lh original.apk
-      - run: |
-          apk-mitm original.apk --wait
+      - name: Patch
+        run: |
+          apk-mitm original.apk
           ls -lh
           test -f original-patched.apk
       - uses: actions/upload-artifact@v4
