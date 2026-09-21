@@ -1,13 +1,15 @@
-name: Patch APK
+name: Patch APKS
 on:
   workflow_dispatch:
     inputs:
       apk_url:
         required: true
+      release_tag:
+        required: true
 jobs:
   patch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -19,17 +21,49 @@ jobs:
           node-version: '20'
       - name: Install apk-mitm
         run: npm install -g apk-mitm
-      - name: Download APK
+      - name: Download APKS Bundle
         run: |
-          curl -L --fail -o original.apk "${{ github.event.inputs.apk_url }}"
-          ls -lh original.apk
-      - name: Patch
+          curl -L --fail -o input.apks "${{ github.event.inputs.apk_url }}"
+          ls -lh input.apks
+      - name: Extract, Patch and Re-sign Splits
         run: |
-          apk-mitm original.apk
-          ls -lh
-          test -f original-patched.apk
-      - uses: actions/upload-artifact@v4
-        with:
-          name: patched-apk
-          path: original-patched.apk
-          retention-days: 3
+          mkdir extracted_apks
+          unzip input.apks -d extracted_apks
+          
+          BASE_APK=$(find extracted_apks -name "base.apk")
+          echo "Bulunan base: $BASE_APK"
+          
+          apk-mitm "$BASE_APK"
+          
+          PATCHED_BASE=$(find . -name "base-patched.apk" -o -name "*-patched.apk")
+          echo "Yamalanan base: $PATCHED_BASE"
+          
+          # Ortak imza için debug keystore oluşturuluyor
+          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -passin pass:android -passout pass:android -dname "CN=Android Debug,O=Android,C=US"
+          
+          # Yamalanan base dosyası orijinalinin üzerine yazılıyor
+          cp "$PATCHED_BASE" "$(dirname "$BASE_APK")/base.apk"
+          
+          # Paketteki tüm split APK dosyaları aynı anahtarla yeniden imzalanıyor
+          for apk_file in $(find extracted_apks -name "*.apk"); do
+            echo "İmzalanıyor: $apk_file"
+            apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android "$apk_file"
+          done
+          
+          # Yeni apks arşivi oluşturuluyor
+          cd extracted_apks
+          zip -r ../patch.apks *
+          cd ..
+          ls -lh patch.apks
+      - name: Upload Patched APKS Directly
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          UPLOAD_URL=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/$REPO/releases/tags/$TAG | jq -r .upload_url | sed 's/{?name,label}//')
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/zip" \
+            --data-binary @patch.apks \
+            "$UPLOAD_URL?name=patch.apks"
