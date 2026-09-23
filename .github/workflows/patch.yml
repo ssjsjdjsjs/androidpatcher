@@ -35,19 +35,27 @@ jobs:
           BASE_APK=$(find extracted_apks -name "base.apk")
           echo "Bulunan base: $BASE_APK"
           
+          # Base APK'yı yamala
           apk-mitm "$BASE_APK"
           
-          PATCHED_BASE=$(find . -name "base-patched.apk" -o -name "*-patched.apk")
+          # Üretilen yamalı APK'yı bul
+          PATCHED_BASE=$(find . -name "*patched*.apk" | head -n 1)
           echo "Yamalanan base: $PATCHED_BASE"
           
-          cp "$PATCHED_BASE" "$(dirname "$BASE_APK")/base.apk"
+          # Yamalı dosyayı doğrudan base.apk üzerine taşı (base-patched.apk silinir)
+          mv -f "$PATCHED_BASE" "$BASE_APK"
+          find extracted_apks -name "*-patched.apk" -delete
           
           curl -L --retry 5 -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
           
+          # Yalnızca geçerli split apk'ları imzala
           APK_FILES=$(find extracted_apks -name "*.apk")
           java -jar uber-apk-signer.jar -a $APK_FILES --allowResign --overwrite
           
-          # Hızlı ve kayıpsız paketleme (zip -0)
+          # uber-apk-signer'ın ürettiği gereksiz .idsig dosyalarını temizle
+          find extracted_apks -name "*.idsig" -delete
+          
+          # Yalnızca temiz APK dosyalarını arşivle
           cd extracted_apks
           zip -0 -q -r ../patch.apks *
           cd ..
