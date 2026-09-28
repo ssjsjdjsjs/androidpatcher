@@ -1,4 +1,4 @@
-name: Patch APKS
+name: Patch APKS (Only User Certs)
 on:
   workflow_dispatch:
     inputs:
@@ -18,16 +18,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install apk-mitm
-        run: npm install -g apk-mitm
+      
+      - name: Install Apktool and Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apktool zip unzip curl python3
+
       - name: Download APKS Bundle
         run: |
           curl -L --fail --retry 5 --retry-connrefused --retry-delay 2 -o input.apks "${{ github.event.inputs.apk_url }}"
           ls -lh input.apks
-      - name: Extract, Patch and Re-sign Splits
+
+      - name: Extract, Inject User Certs and Rebuild
         run: |
           mkdir extracted_apks
           unzip -q input.apks -d extracted_apks
@@ -35,31 +37,74 @@ jobs:
           BASE_APK=$(find extracted_apks -name "base.apk")
           echo "Bulunan base: $BASE_APK"
           
-          # Base APK'yı yamala
-          apk-mitm "$BASE_APK"
+          # Apktool ile decode et (--no-src ile sadece kaynaklar açılır)
+          apktool d "$BASE_APK" -o decoded_base --no-src
           
-          # Üretilen yamalı APK'yı bul
-          PATCHED_BASE=$(find . -name "*patched*.apk" | head -n 1)
-          echo "Yamalanan base: $PATCHED_BASE"
+          # Python ile akıllı kontrol ve ekleme (Sadece user sertifikası güveni)
+          python3 -c '
+import re
+import os
+
+manifest_path = "decoded_base/AndroidManifest.xml"
+with open(manifest_path, "r", encoding="utf-8") as f:
+    manifest_content = f.read()
+
+# Manifestte zaten networkSecurityConfig tanımlı mı bak
+match = re.search(r"android:networkSecurityConfig=["']@xml/([^"']+)["']", manifest_content)
+xml_dir = "decoded_base/res/xml"
+os.makedirs(xml_dir, exist_ok=True)
+
+if match:
+    config_name = match.group(1)
+    config_file = os.path.join(xml_dir, f"{config_name}.xml")
+    print(f"Mevcut network config bulundu: {config_file}")
+    
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as cf:
+            cf_content = cf.read()
+        # İçinde user sertifikası yoksa trust-anchors içine ekle
+        if "src="user"" not in cf_content and "src='user'" not in cf_content:
+            if "<trust-anchors>" in cf_content:
+                cf_content = cf_content.replace("<trust-anchors>", "<trust-anchors>\n            <certificates src="user" />")
+            with open(config_file, "w", encoding="utf-8") as cf:
+                cf.write(cf_content)
+            print("Mevcut config dosyasına user sertifikası eklendi.")
+        else:
+            print("Config dosyasında zaten user sertifikası tanımlı.")
+    else:
+        with open(config_file, "w", encoding="utf-8") as cf:
+            cf.write("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<network-security-config>\n    <base-config>\n        <trust-anchors>\n            <certificates src=\"system\" />\n            <certificates src=\"user\" />\n        </trust-anchors>\n    </base-config>\n</network-security-config>")
+        print("Eksik olan config dosyası oluşturulup user sertifikası eklendi.")
+else:
+    manifest_content = re.sub(r"<application\b", "<application android:networkSecurityConfig=\"@xml/network_security_config\"", manifest_content, count=1)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        f.write(manifest_content)
+    
+    config_file_path = os.path.join(xml_dir, "network_security_config.xml")
+    with open(config_file_path, "w", encoding="utf-8") as cf:
+        cf.write("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<network-security-config>\n    <base-config>\n        <trust-anchors>\n            <certificates src=\"system\" />\n            <certificates src=\"user\" />\n        </trust-anchors>\n    </base-config>\n</network-security-config>")
+    print("Manifeste networkSecurityConfig eklendi ve user sertifikası içeren config dosyası oluşturuldu.")
+'
           
-          # Yamalı dosyayı doğrudan base.apk üzerine taşı (base-patched.apk silinir)
-          mv -f "$PATCHED_BASE" "$BASE_APK"
-          find extracted_apks -name "*-patched.apk" -delete
-          
+          # Yeniden derle
+          apktool b decoded_base -o patched_base.apk
+          cp -f patched_base.apk "$BASE_APK"
+          rm -rf decoded_base patched_base.apk
+
+      - name: Sign Splits with Uber APK Signer
+        run: |
           curl -L --retry 5 -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
           
-          # Yalnızca geçerli split apk'ları imzala
           APK_FILES=$(find extracted_apks -name "*.apk")
           java -jar uber-apk-signer.jar -a $APK_FILES --allowResign --overwrite
           
-          # uber-apk-signer'ın ürettiği gereksiz .idsig dosyalarını temizle
           find extracted_apks -name "*.idsig" -delete
           
-          # Yalnızca temiz APK dosyalarını arşivle
           cd extracted_apks
           zip -0 -q -r ../patch.apks *
           cd ..
           ls -lh patch.apks
+
       - name: Upload Patched APKS Directly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
