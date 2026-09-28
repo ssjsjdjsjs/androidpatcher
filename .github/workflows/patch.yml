@@ -15,8 +15,10 @@ jobs:
     permissions:
       contents: write
     timeout-minutes: 25
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,7 +27,7 @@ jobs:
       - name: Install Apktool and Tools
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y apktool zip unzip python3 aria2
+          sudo apt-get install -y apktool zip unzip curl python3 aria2
 
       - name: Download APKS Bundle
         run: |
@@ -36,53 +38,68 @@ jobs:
         run: |
           mkdir -p extracted_apks
           unzip -q input.apks -d extracted_apks
+
           BASE_APK=$(find extracted_apks -type f -name "base.apk" | head -n 1)
+
           if [ -z "$BASE_APK" ]; then
             echo "base.apk bulunamadı"
             exit 1
           fi
+
+          echo "Bulunan base: $BASE_APK"
+
           apktool d "$BASE_APK" -o decoded_base --no-src --force
 
           python3 <<'PY'
-import os,re
+import os
+import re
 
-manifest_path="decoded_base/AndroidManifest.xml"
+manifest_path = "decoded_base/AndroidManifest.xml"
 
-with open(manifest_path,"r",encoding="utf-8") as f:
-    manifest_content=f.read()
+with open(manifest_path, "r", encoding="utf-8") as f:
+    manifest_content = f.read()
 
-match=re.search(r'android:networkSecurityConfig=["']@xml/([^"']+)["']',manifest_content)
+match = re.search(r'android:networkSecurityConfig=["\']@xml/([^"\']+)["\']', manifest_content)
 
-xml_dir="decoded_base/res/xml"
-os.makedirs(xml_dir,exist_ok=True)
+xml_dir = "decoded_base/res/xml"
+os.makedirs(xml_dir, exist_ok=True)
 
-CONFIG_TEXT="<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<network-security-config>\n    <base-config>\n        <trust-anchors>\n            <certificates src=\"system\" />\n            <certificates src=\"user\" />\n        </trust-anchors>\n    </base-config>\n</network-security-config>\n"
+CONFIG_TEXT = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<network-security-config>\n    <base-config>\n        <trust-anchors>\n            <certificates src=\"system\" />\n            <certificates src=\"user\" />\n        </trust-anchors>\n    </base-config>\n</network-security-config>\n"
 
 if match:
-    config_file=os.path.join(xml_dir,match.group(1)+".xml")
+    config_name = match.group(1)
+    config_file = os.path.join(xml_dir, config_name + ".xml")
 
     if os.path.exists(config_file):
-        with open(config_file,"r",encoding="utf-8") as f:
-            content=f.read()
+        with open(config_file, "r", encoding="utf-8") as f:
+            content = f.read()
 
         if 'src="user"' not in content and "src='user'" not in content:
             if "<trust-anchors>" in content:
-                content=content.replace("<trust-anchors>","<trust-anchors>\n            <certificates src=\"user\" />",1)
+                content = content.replace("<trust-anchors>", "<trust-anchors>\n            <certificates src=\"user\" />", 1)
             else:
-                content=CONFIG_TEXT
+                content = CONFIG_TEXT
 
-            with open(config_file,"w",encoding="utf-8") as f:
+            with open(config_file, "w", encoding="utf-8") as f:
                 f.write(content)
     else:
-        with open(config_file,"w",encoding="utf-8") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             f.write(CONFIG_TEXT)
-else:
-    manifest_content=re.sub(r"<application\b",'<application android:networkSecurityConfig="@xml/network_security_config"',manifest_content,count=1)
 
-    with open(manifest_path,"w",encoding="utf-8") as f:
+else:
+    manifest_content = re.sub(
+        r"<application\b",
+        '<application android:networkSecurityConfig="@xml/network_security_config"',
+        manifest_content,
+        count=1
+    )
+
+    with open(manifest_path, "w", encoding="utf-8") as f:
         f.write(manifest_content)
 
-    with open(os.path.join(xml_dir,"network_security_config.xml"),"w",encoding="utf-8") as f:
+    config_file = os.path.join(xml_dir, "network_security_config.xml")
+
+    with open(config_file, "w", encoding="utf-8") as f:
         f.write(CONFIG_TEXT)
 PY
 
@@ -92,8 +109,8 @@ PY
 
       - name: Sign Splits
         run: |
+          curl -L --fail --retry 8 --retry-delay 1 --retry-connrefused -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
           mapfile -t APK_FILES < <(find extracted_apks -type f -name "*.apk")
-          wget -q --tries=8 --waitretry=1 -O uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
           java -jar uber-apk-signer.jar -a "${APK_FILES[@]}" --allowResign --overwrite
           find extracted_apks -type f -name "*.idsig" -delete
 
@@ -104,7 +121,7 @@ PY
           cd ..
           ls -lh patch.apks
 
-      - name: Upload Patched APKS
+      - name: Upload Patched APKS Directly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
