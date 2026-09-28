@@ -19,14 +19,14 @@ jobs:
           distribution: temurin
           java-version: '17'
       
-      - name: Install Tools (with pigz for parallel compression)
+      - name: Install Tools (aria2 for ultra-fast parallel downloads)
         run: |
           sudo apt-get update
-          sudo apt-get install -y apktool zip unzip curl python3 pigz
+          sudo apt-get install -y apktool zip unzip python3 pigz aria2
 
-      - name: Download APKS Bundle
+      - name: Download APKS Bundle (Multi-connection aria2c)
         run: |
-          curl -L --fail --retry 5 --retry-connrefused --retry-delay 2 -o input.apks "${{ github.event.inputs.apk_url }}"
+          aria2c -x 16 -s 16 --file-allocation=none -o input.apks "${{ github.event.inputs.apk_url }}"
           ls -lh input.apks
 
       - name: Extract, Inject User Certs and Rebuild
@@ -37,10 +37,9 @@ jobs:
           BASE_APK=$(find extracted_apks -name "base.apk")
           echo "Bulunan base: $BASE_APK"
           
-          # Apktool ile decode et (--no-src ile sadece kaynaklar açılır)
           apktool d "$BASE_APK" -o decoded_base --no-src
           
-          # Python ile SADECE network config içine user sertifikası ekleme (Manifest ellenmiyor)
+          # Manifest ELLENMİYOR. Sadece network config içine user sertifikası ekleniyor.
           python3 -c '
 import re
 import os
@@ -63,23 +62,22 @@ if match:
                 cf_content = cf_content.replace("<trust-anchors>", "<trust-anchors>\n            <certificates src="user" />")
             with open(config_file, "w", encoding="utf-8") as cf:
                 cf.write(cf_content)
-            print("Mevcut network config dosyasina SADECE user sertifikasi eklendi. Geriye dokunulmadi.")
+            print("Network config dosyasina SADECE user sertifikasi eklendi.")
         else:
             print("Config dosyasinda zaten user sertifikasi tanimli.")
     else:
         print("Network config dosyasi bulunamadi!")
 else:
-    print("Manifestte networkSecurityConfig tanimi bulunamadi!")
+    print("Manifestte networkSecurityConfig tanimi yok.")
 '
           
-          # Yeniden derle
           apktool b decoded_base -o patched_base.apk
           cp -f patched_base.apk "$BASE_APK"
           rm -rf decoded_base patched_base.apk
 
       - name: Sign Splits with Uber APK Signer
         run: |
-          curl -L --retry 5 -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          aria2c -x 16 -s 16 --file-allocation=none -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
           
           APK_FILES=$(find extracted_apks -name "*.apk")
           java -jar uber-apk-signer.jar -a $APK_FILES --allowResign --overwrite
@@ -87,8 +85,7 @@ else:
           find extracted_apks -name "*.idsig" -delete
           
           cd extracted_apks
-          # pigz ile çok çekirdekli ultra hızlı zip sıkıştırma
-          zip -0 -q -r ../patch.apks *
+          zip -0 -q -r --compression-method store ../patch.apks *
           cd ..
           ls -lh patch.apks
 
