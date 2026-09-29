@@ -1,7 +1,9 @@
-name: Patch APKS Parallel
+name: Patch APKS Fast AAPT2
 on:
   workflow_dispatch:
     inputs:
+      apk_url:
+        required: true
       release_tag:
         required: true
 jobs:
@@ -22,16 +24,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y apktool zip unzip python3 aria2
 
-      - name: Download & Merge 4 Chunks
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download APKS Bundle
         run: |
-          gh release download "${{ github.event.inputs.release_tag }}" -p "part_*"
-          cat part_0 part_1 part_2 part_3 > input.apks
-          rm -f part_*
+          aria2c -x 16 -s 16 --file-allocation=none -o input.apks "${{ github.event.inputs.apk_url }}"
           ls -lh input.apks
 
-      - name: Extract, Inject User Certs and Rebuild
+      - name: Extract, Inject User Certs and Rebuild with AAPT2
         run: |
           mkdir extracted_apks
           unzip -q input.apks -d extracted_apks
@@ -73,7 +71,8 @@ else:
     print("Manifestte networkSecurityConfig tanimi yok.")
 '
           
-          apktool b decoded_base -o patched_base.apk
+          # AAPT2 ile ultra hızlı ve hatasız derleme
+          apktool b decoded_base -o patched_base.apk --use-aapt2
           cp -f patched_base.apk "$BASE_APK"
           rm -rf decoded_base patched_base.apk
 
