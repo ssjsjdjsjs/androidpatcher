@@ -2,10 +2,10 @@ name: Patch APKS Fast AAPT2
 on:
   workflow_dispatch:
     inputs:
-      apk_url:
-        required: true
       release_tag:
+        description: 'Release Tag'
         required: true
+        type: string
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -24,9 +24,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y apktool zip unzip python3 aria2
 
-      - name: Download APKS Bundle
+      - name: Download APKS Bundle from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          aria2c -x 16 -s 16 --file-allocation=none -o input.apks "${{ github.event.inputs.apk_url }}"
+          gh release download "${{ github.event.inputs.release_tag }}" -p "*.apks" -O input.apks
           ls -lh input.apks
 
       - name: Extract, Inject User Certs and Rebuild with AAPT2
@@ -71,7 +73,7 @@ else:
     print("Manifestte networkSecurityConfig tanimi yok.")
 '
           
-          # AAPT2 ile ultra hızlı ve hatasız derleme
+          # AAPT2 ile ultra hızlı ve split hatasız derleme
           apktool b decoded_base -o patched_base.apk --use-aapt2
           cp -f patched_base.apk "$BASE_APK"
           rm -rf decoded_base patched_base.apk
