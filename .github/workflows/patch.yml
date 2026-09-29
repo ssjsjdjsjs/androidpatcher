@@ -6,6 +6,8 @@ on:
         description: 'Release Tag'
         required: true
         type: string
+  repository_dispatch:
+    types: [patch_apks]
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -28,7 +30,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "${{ github.event.inputs.release_tag }}" -p "*.apks" -O input.apks
+          TAG="${{ github.event.inputs.release_tag || github.event.client_payload.release_tag }}"
+          echo "Hedef Tag: $TAG"
+          gh release download "$TAG" -p "*.apks" -O input.apks
           ls -lh input.apks
 
       - name: Extract, Inject User Certs and Rebuild with AAPT2
@@ -73,7 +77,7 @@ else:
     print("Manifestte networkSecurityConfig tanimi yok.")
 '
           
-          # AAPT2 ile ultra hızlı ve split hatasız derleme
+          # AAPT2 ile hızlı ve split hatasız derleme
           apktool b decoded_base -o patched_base.apk --use-aapt2
           cp -f patched_base.apk "$BASE_APK"
           rm -rf decoded_base patched_base.apk
@@ -96,4 +100,5 @@ else:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.event.inputs.release_tag }}" patch.apks --clobber
+          TAG="${{ github.event.inputs.release_tag || github.event.client_payload.release_tag }}"
+          gh release upload "$TAG" patch.apks --clobber
