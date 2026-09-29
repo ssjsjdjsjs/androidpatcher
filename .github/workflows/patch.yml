@@ -26,10 +26,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 4 parçayı aynı anda GitHub API'den paralel indir
           gh release download "${{ github.event.inputs.release_tag }}" -p "part_*"
-          
-          # Parçaları sırayla tek parça APKS dosyasına birleştir (0.2 saniye)
           cat part_0 part_1 part_2 part_3 > input.apks
           rm -f part_*
           ls -lh input.apks
