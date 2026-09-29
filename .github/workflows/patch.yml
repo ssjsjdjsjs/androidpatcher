@@ -1,9 +1,7 @@
-name: Patch APKS (Only User Certs)
+name: Patch APKS Parallel
 on:
   workflow_dispatch:
     inputs:
-      apk_url:
-        required: true
       release_tag:
         required: true
 jobs:
@@ -19,14 +17,21 @@ jobs:
           distribution: temurin
           java-version: '17'
       
-      - name: Install Tools (aria2 for ultra-fast parallel downloads)
+      - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y apktool zip unzip python3 pigz aria2
+          sudo apt-get install -y apktool zip unzip python3 aria2
 
-      - name: Download APKS Bundle (Multi-connection aria2c)
+      - name: Download & Merge 4 Chunks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          aria2c -x 16 -s 16 --file-allocation=none -o input.apks "${{ github.event.inputs.apk_url }}"
+          # 4 parçayı aynı anda GitHub API'den paralel indir
+          gh release download "${{ github.event.inputs.release_tag }}" -p "part_*"
+          
+          # Parçaları sırayla tek parça APKS dosyasına birleştir (0.2 saniye)
+          cat part_0 part_1 part_2 part_3 > input.apks
+          rm -f part_*
           ls -lh input.apks
 
       - name: Extract, Inject User Certs and Rebuild
