@@ -36,9 +36,9 @@ jobs:
           unxz frida-gadget-${VERSION}-android-arm64.so.xz
           mv frida-gadget-${VERSION}-android-arm64.so libfrida-gadget.so
 
-      - name: Inject Frida Gadget & Fix AAPT2 Errors via Python
+      - name: Inject Frida Gadget & Fix AAPT2 Errors via Python Script
         run: |
-          python3 -c '
+          cat << 'EOF' > patch_script.py
           import os, subprocess, re, shutil, traceback
           from pathlib import Path
 
@@ -78,28 +78,27 @@ jobs:
                   manifest_txt = manifest_txt.replace("<application", "<uses-permission android:name="android.permission.INTERNET"/><application")
                   open(manifest_path, "w", encoding="utf-8").write(manifest_txt)
 
-              # MAIN action içeren ana aktiviteyi akıllıca bul
               act_name = None
-              activities = re.findall(r"<activity\b[^>]*>(.*?)</activity>", manifest_txt, re.DOTALL)
+              activities = re.findall(r'<activity\b[^>]*>(.*?)</activity>', manifest_txt, re.DOTALL)
               for act in activities:
                   if "android.intent.action.MAIN" in act:
-                      m_name = re.search(r"android:name="([^"]+)"", act)
+                      m_name = re.search(r'android:name="([^"]+)"', act)
                       if m_name:
                           act_name = m_name.group(1)
                           break
               
               if not act_name:
-                  m_fallback = re.search(r"<activity[^>]*android:name="([^"]+)"", manifest_txt)
+                  m_fallback = re.search(r'<activity[^>]*android:name="([^"]+)"', manifest_txt)
                   if m_fallback:
                       act_name = m_fallback.group(1)
 
               if act_name:
                   if act_name.startswith("."):
-                      pkg_match = re.search(r"package="([^"]+)"", manifest_txt)
+                      pkg_match = re.search(r'package="([^"]+)"', manifest_txt)
                       if pkg_match:
                           act_name = pkg_match.group(1) + act_name
                   elif "." not in act_name:
-                      pkg_match = re.search(r"package="([^"]+)"", manifest_txt)
+                      pkg_match = re.search(r'package="([^"]+)"', manifest_txt)
                       if pkg_match:
                           act_name = pkg_match.group(1) + "." + act_name
                   
@@ -108,7 +107,7 @@ jobs:
                   
                   if smali_path.exists():
                       smali_code = smali_path.read_text(encoding="utf-8")
-                      load_code = "\n    const-string v0, \"frida-gadget\"\n    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n"
+                      load_code = '\n    const-string v0, "frida-gadget"\n    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n'
                       if "->loadLibrary" not in smali_code:
                           if ".method public constructor <init>()V" in smali_code:
                               smali_code = smali_code.replace(".method public constructor <init>()V", ".method public constructor <init>()V\n" + load_code)
@@ -116,8 +115,6 @@ jobs:
                             smali_code = smali_code.replace(".method static constructor <clinit>()V", ".method static constructor <clinit>()V\n" + load_code)
                           smali_path.write_text(smali_code, encoding="utf-8")
                           print("[✓] Frida Gadget kodları Smali sınıfına enjekte edildi.")
-                  else:
-                      print("[!] Uyarı: Smali dosyası tam konumda bulunamadı, ancak derleme devam ediyor.")
 
               print("[*] Apktool ile yeniden derleniyor...")
               subprocess.run(["apktool", "b", "decoded", "-o", "patched_base.apk"], check=True)
@@ -125,7 +122,8 @@ jobs:
               print("[!] Python enjeksiyon sırasında hata oluştu:")
               traceback.print_exc()
               exit(1)
-          '
+          EOF
+          python3 patch_script.py
 
       - name: Sign Patched APK
         run: |
