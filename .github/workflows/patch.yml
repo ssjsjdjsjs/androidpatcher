@@ -1,4 +1,4 @@
-name: Patch APK with Frida Gadget (Objection)
+name: Patch base.apk with Frida Gadget
 on:
   workflow_dispatch:
     inputs:
@@ -24,17 +24,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y apktool zip unzip curl python3 wget aria2 xz-utils
 
-      - name: Download APK/APKS Bundle
+      - name: Download base.apk
         run: |
-          curl -L -o input_file "${{ github.event.inputs.apk_url }}"
-          if unzip -t input_file 2>/dev/null; then
-            mkdir extracted_apks
-            unzip -q input_file -d extracted_apks
-            BASE_APK=$(find extracted_apks -name "base.apk")
-            cp "$BASE_APK" base.apk
-          else
-            mv input_file base.apk
-          fi
+          curl -L -o base.apk "${{ github.event.inputs.apk_url }}"
           ls -lh base.apk
 
       - name: Download Frida Gadget (ARM64)
