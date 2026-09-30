@@ -39,68 +39,92 @@ jobs:
       - name: Inject Frida Gadget & Fix AAPT2 Errors via Python
         run: |
           python3 -c '
-          import os, subprocess, re, shutil
+          import os, subprocess, re, shutil, traceback
           from pathlib import Path
 
-          print("[*] Apktool ile decode ediliyor...")
-          subprocess.run(["apktool", "d", "base.apk", "-o", "decoded", "-f"], check=True)
+          try:
+              print("[*] Apktool ile decode ediliyor...")
+              subprocess.run(["apktool", "d", "base.apk", "-o", "decoded", "-f"], check=True)
 
-          print("[*] AAPT2 için $ karakterleri temizleniyor...")
-          for root, dirs, files in os.walk("decoded", topdown=False):
-              for file in files:
-                  if "$" in file:
-                      os.rename(os.path.join(root, file), os.path.join(root, file.replace("$", "s_")))
-              for d in dirs:
-                  if "$" in d:
-                      os.rename(os.path.join(root, d), os.path.join(root, d.replace("$", "s_")))
+              print("[*] AAPT2 için $ karakterleri temizleniyor...")
+              for root, dirs, files in os.walk("decoded", topdown=False):
+                  for file in files:
+                      if "$" in file:
+                          os.rename(os.path.join(root, file), os.path.join(root, file.replace("$", "s_")))
+                  for d in dirs:
+                      if "$" in d:
+                          os.rename(os.path.join(root, d), os.path.join(root, d.replace("$", "s_")))
 
-          for root, dirs, files in os.walk("decoded"):
-              for file in files:
-                  if file.endswith(".xml"):
-                      p = os.path.join(root, file)
-                      try:
-                          txt = open(p, "r", encoding="utf-8").read()
-                          if "$" in txt:
-                              open(p, "w", encoding="utf-8").write(txt.replace("$", "s_"))
-                      except: pass
+              for root, dirs, files in os.walk("decoded"):
+                  for file in files:
+                      if file.endswith(".xml"):
+                          p = os.path.join(root, file)
+                          try:
+                              txt = open(p, "r", encoding="utf-8").read()
+                              if "$" in txt:
+                                  open(p, "w", encoding="utf-8").write(txt.replace("$", "s_"))
+                          except: pass
 
-          print("[*] Frida Gadget kütüphanesi ekleniyor...")
-          lib_dir = Path("decoded/lib/arm64-v8a")
-          lib_dir.mkdir(parents=True, exist_ok=True)
-          shutil.copy("libfrida-gadget.so", lib_dir / "libfrida-gadget.so")
+              print("[*] Frida Gadget kütüphanesi ekleniyor...")
+              lib_dir = Path("decoded/lib/arm64-v8a")
+              lib_dir.mkdir(parents=True, exist_ok=True)
+              shutil.copy("libfrida-gadget.so", lib_dir / "libfrida-gadget.so")
 
-          print("[*] Manifest ve Main Activity taranıyor...")
-          manifest_path = "decoded/AndroidManifest.xml"
-          manifest_txt = open(manifest_path, "r", encoding="utf-8").read()
+              print("[*] Manifest ve Main Activity taranıyor...")
+              manifest_path = "decoded/AndroidManifest.xml"
+              manifest_txt = open(manifest_path, "r", encoding="utf-8").read()
 
-          if "android.permission.INTERNET" not in manifest_txt:
-              manifest_txt = manifest_txt.replace("<application", "<uses-permission android:name="android.permission.INTERNET"/><application")
-              open(manifest_path, "w", encoding="utf-8").write(manifest_txt)
+              if "android.permission.INTERNET" not in manifest_txt:
+                  manifest_txt = manifest_txt.replace("<application", "<uses-permission android:name="android.permission.INTERNET"/><application")
+                  open(manifest_path, "w", encoding="utf-8").write(manifest_txt)
 
-          match_act = re.search(r'<activity[^>]*android:name="([^"]+)"', manifest_txt)
-          if match_act:
-              act_name = match_act.group(1)
-              if act_name.startswith("."):
-                  pkg_match = re.search(r'package="([^"]+)"', manifest_txt)
-                  if pkg_match:
-                      act_name = pkg_match.group(1) + act_name
+              # MAIN action içeren ana aktiviteyi akıllıca bul
+              act_name = None
+              activities = re.findall(r"<activity\b[^>]*>(.*?)</activity>", manifest_txt, re.DOTALL)
+              for act in activities:
+                  if "android.intent.action.MAIN" in act:
+                      m_name = re.search(r"android:name="([^"]+)"", act)
+                      if m_name:
+                          act_name = m_name.group(1)
+                          break
               
-              print(f"[+] Hedef Activity: {act_name}")
-              smali_path = Path("decoded/smali") / (act_name.replace(".", "/") + ".smali")
-              
-              if smali_path.exists():
-                  smali_code = smali_path.read_text(encoding="utf-8")
-                  load_code = '\n    const-string v0, "frida-gadget"\n    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n'
-                  if "->loadLibrary" not in smali_code:
-                      if ".method public constructor <init>()V" in smali_code:
-                          smali_code = smali_code.replace(".method public constructor <init>()V", ".method public constructor <init>()V\n" + load_code)
-                      elif ".method static constructor <clinit>()V" in smali_code:
-                        smali_code = smali_code.replace(".method static constructor <clinit>()V", ".method static constructor <clinit>()V\n" + load_code)
-                      smali_path.write_text(smali_code, encoding="utf-8")
-                      print("[✓] Frida Gadget kodları Smali sınıfına enjekte edildi.")
+              if not act_name:
+                  m_fallback = re.search(r"<activity[^>]*android:name="([^"]+)"", manifest_txt)
+                  if m_fallback:
+                      act_name = m_fallback.group(1)
 
-          print("[*] Apktool ile yeniden derleniyor...")
-          subprocess.run(["apktool", "b", "decoded", "-o", "patched_base.apk"], check=True)
+              if act_name:
+                  if act_name.startswith("."):
+                      pkg_match = re.search(r"package="([^"]+)"", manifest_txt)
+                      if pkg_match:
+                          act_name = pkg_match.group(1) + act_name
+                  elif "." not in act_name:
+                      pkg_match = re.search(r"package="([^"]+)"", manifest_txt)
+                      if pkg_match:
+                          act_name = pkg_match.group(1) + "." + act_name
+                  
+                  print(f"[+] Hedef Activity: {act_name}")
+                  smali_path = Path("decoded/smali") / (act_name.replace(".", "/") + ".smali")
+                  
+                  if smali_path.exists():
+                      smali_code = smali_path.read_text(encoding="utf-8")
+                      load_code = "\n    const-string v0, \"frida-gadget\"\n    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n"
+                      if "->loadLibrary" not in smali_code:
+                          if ".method public constructor <init>()V" in smali_code:
+                              smali_code = smali_code.replace(".method public constructor <init>()V", ".method public constructor <init>()V\n" + load_code)
+                          elif ".method static constructor <clinit>()V" in smali_code:
+                            smali_code = smali_code.replace(".method static constructor <clinit>()V", ".method static constructor <clinit>()V\n" + load_code)
+                          smali_path.write_text(smali_code, encoding="utf-8")
+                          print("[✓] Frida Gadget kodları Smali sınıfına enjekte edildi.")
+                  else:
+                      print("[!] Uyarı: Smali dosyası tam konumda bulunamadı, ancak derleme devam ediyor.")
+
+              print("[*] Apktool ile yeniden derleniyor...")
+              subprocess.run(["apktool", "b", "decoded", "-o", "patched_base.apk"], check=True)
+          except Exception as e:
+              print("[!] Python enjeksiyon sırasında hata oluştu:")
+              traceback.print_exc()
+              exit(1)
           '
 
       - name: Sign Patched APK
