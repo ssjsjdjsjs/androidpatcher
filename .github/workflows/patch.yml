@@ -1,13 +1,11 @@
-name: Patch APKS Fast AAPT2
+name: Patch APK with Frida Gadget (Objection)
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Release Tag'
+      apk_url:
         required: true
-        type: string
-  repository_dispatch:
-    types: [patch_apks]
+      release_tag:
+        required: true
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -24,81 +22,103 @@ jobs:
       - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y apktool zip unzip python3 aria2
+          sudo apt-get install -y apktool zip unzip curl python3 wget aria2 xz-utils
 
-      - name: Download APKS Bundle from Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download APK/APKS Bundle
         run: |
-          TAG="${{ github.event.inputs.release_tag || github.event.client_payload.release_tag }}"
-          echo "Hedef Tag: $TAG"
-          gh release download "$TAG" -p "*.apks" -O input.apks
-          ls -lh input.apks
+          curl -L -o input_file "${{ github.event.inputs.apk_url }}"
+          if unzip -t input_file 2>/dev/null; then
+            mkdir extracted_apks
+            unzip -q input_file -d extracted_apks
+            BASE_APK=$(find extracted_apks -name "base.apk")
+            cp "$BASE_APK" base.apk
+          else
+            mv input_file base.apk
+          fi
+          ls -lh base.apk
 
-      - name: Extract, Inject User Certs and Rebuild with AAPT2
+      - name: Download Frida Gadget (ARM64)
         run: |
-          mkdir extracted_apks
-          unzip -q input.apks -d extracted_apks
-          
-          BASE_APK=$(find extracted_apks -name "base.apk")
-          echo "Bulunan base: $BASE_APK"
-          
-          apktool d "$BASE_APK" -o decoded_base --no-src
-          
-          # Manifest ELLENMİYOR. Sadece network config içine user sertifikası ekleniyor.
+          VERSION="16.1.8"
+          wget https://github.com/frida/frida/releases/download/${VERSION}/frida-gadget-${VERSION}-android-arm64.so.xz
+          unxz frida-gadget-${VERSION}-android-arm64.so.xz
+          mv frida-gadget-${VERSION}-android-arm64.so libfrida-gadget.so
+
+      - name: Inject Frida Gadget & Fix AAPT2 Errors via Python
+        run: |
           python3 -c '
-import re
-import os
+          import os, subprocess, re, shutil
+          from pathlib import Path
 
-manifest_path = "decoded_base/AndroidManifest.xml"
-with open(manifest_path, "r", encoding="utf-8") as f:
-    manifest_content = f.read()
+          print("[*] Apktool ile decode ediliyor...")
+          subprocess.run(["apktool", "d", "base.apk", "-o", "decoded", "-f"], check=True)
 
-match = re.search(r"android:networkSecurityConfig=["']@xml/([^"']+)["']", manifest_content)
-xml_dir = "decoded_base/res/xml"
+          print("[*] AAPT2 için $ karakterleri temizleniyor...")
+          for root, dirs, files in os.walk("decoded", topdown=False):
+              for file in files:
+                  if "$" in file:
+                      os.rename(os.path.join(root, file), os.path.join(root, file.replace("$", "s_")))
+              for d in dirs:
+                  if "$" in d:
+                      os.rename(os.path.join(root, d), os.path.join(root, d.replace("$", "s_")))
 
-if match:
-    config_name = match.group(1)
-    config_file = os.path.join(xml_dir, f"{config_name}.xml")
-    if os.path.exists(config_file):
-        with open(config_file, "r", encoding="utf-8") as cf:
-            cf_content = cf.read()
-        if "src="user"" not in cf_content and "src='user'" not in cf_content:
-            if "<trust-anchors>" in cf_content:
-                cf_content = cf_content.replace("<trust-anchors>", "<trust-anchors>\n            <certificates src="user" />")
-            with open(config_file, "w", encoding="utf-8") as cf:
-                cf.write(cf_content)
-            print("Network config dosyasina SADECE user sertifikasi eklendi.")
-        else:
-            print("Config dosyasinda zaten user sertifikasi tanimli.")
-    else:
-        print("Network config dosyasi bulunamadi!")
-else:
-    print("Manifestte networkSecurityConfig tanimi yok.")
-'
-          
-          # AAPT2 ile hızlı ve split hatasız derleme
-          apktool b decoded_base -o patched_base.apk --use-aapt2
-          cp -f patched_base.apk "$BASE_APK"
-          rm -rf decoded_base patched_base.apk
+          for root, dirs, files in os.walk("decoded"):
+              for file in files:
+                  if file.endswith(".xml"):
+                      p = os.path.join(root, file)
+                      try:
+                          txt = open(p, "r", encoding="utf-8").read()
+                          if "$" in txt:
+                              open(p, "w", encoding="utf-8").write(txt.replace("$", "s_"))
+                      except: pass
 
-      - name: Sign Splits with Uber APK Signer
+          print("[*] Frida Gadget kütüphanesi ekleniyor...")
+          lib_dir = Path("decoded/lib/arm64-v8a")
+          lib_dir.mkdir(parents=True, exist_ok=True)
+          shutil.copy("libfrida-gadget.so", lib_dir / "libfrida-gadget.so")
+
+          print("[*] Manifest ve Main Activity taranıyor...")
+          manifest_path = "decoded/AndroidManifest.xml"
+          manifest_txt = open(manifest_path, "r", encoding="utf-8").read()
+
+          if "android.permission.INTERNET" not in manifest_txt:
+              manifest_txt = manifest_txt.replace("<application", "<uses-permission android:name="android.permission.INTERNET"/><application")
+              open(manifest_path, "w", encoding="utf-8").write(manifest_txt)
+
+          match_act = re.search(r'<activity[^>]*android:name="([^"]+)"', manifest_txt)
+          if match_act:
+              act_name = match_act.group(1)
+              if act_name.startswith("."):
+                  pkg_match = re.search(r'package="([^"]+)"', manifest_txt)
+                  if pkg_match:
+                      act_name = pkg_match.group(1) + act_name
+              
+              print(f"[+] Hedef Activity: {act_name}")
+              smali_path = Path("decoded/smali") / (act_name.replace(".", "/") + ".smali")
+              
+              if smali_path.exists():
+                  smali_code = smali_path.read_text(encoding="utf-8")
+                  load_code = '\n    const-string v0, "frida-gadget"\n    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n'
+                  if "->loadLibrary" not in smali_code:
+                      if ".method public constructor <init>()V" in smali_code:
+                          smali_code = smali_code.replace(".method public constructor <init>()V", ".method public constructor <init>()V\n" + load_code)
+                      elif ".method static constructor <clinit>()V" in smali_code:
+                        smali_code = smali_code.replace(".method static constructor <clinit>()V", ".method static constructor <clinit>()V\n" + load_code)
+                      smali_path.write_text(smali_code, encoding="utf-8")
+                      print("[✓] Frida Gadget kodları Smali sınıfına enjekte edildi.")
+
+          print("[*] Apktool ile yeniden derleniyor...")
+          subprocess.run(["apktool", "b", "decoded", "-o", "patched_base.apk"], check=True)
+          '
+
+      - name: Sign Patched APK
         run: |
-          aria2c -x 16 -s 16 --file-allocation=none -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
-          
-          APK_FILES=$(find extracted_apks -name "*.apk")
-          java -jar uber-apk-signer.jar -a $APK_FILES --allowResign --overwrite
-          
-          find extracted_apks -name "*.idsig" -delete
-          
-          cd extracted_apks
-          zip -0 -q -r --compression-method store ../patch.apks *
-          cd ..
-          ls -lh patch.apks
+          curl -L -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+          java -jar uber-apk-signer.jar -a patched_base.apk --allowResign --overwrite
+          mv patched_base-aligned-debugSigned.apk final.apk
 
-      - name: Upload Patched APKS Directly
+      - name: Upload Patched APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.inputs.release_tag || github.event.client_payload.release_tag }}"
-          gh release upload "$TAG" patch.apks --clobber
+          gh release upload "${{ github.event.inputs.release_tag }}" final.apk --clobber
